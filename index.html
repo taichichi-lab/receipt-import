@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>レシート取込ツール（せどり管理表）</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --line:#e2e5ea; --accent:#1f9d55; --accent2:#147a40; --muted:#6b7280; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,"Hiragino Kaku Gothic ProN","Yu Gothic",sans-serif;
+         background:var(--bg); color:#1f2937; line-height:1.6; }
+  header { background:#111827; color:#fff; padding:14px 16px; font-size:18px; font-weight:bold; }
+  main { max-width:760px; margin:0 auto; padding:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px; }
+  .card h2 { font-size:15px; margin:0 0 10px; }
+  label { font-size:13px; color:var(--muted); display:block; margin-bottom:4px; }
+  input[type=text], input[type=password], input[type=number], input[type=date] {
+    width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:8px; font-size:14px; }
+  .row-flex { display:flex; gap:8px; flex-wrap:wrap; }
+  button { cursor:pointer; border:none; border-radius:8px; font-size:14px; font-weight:bold; padding:10px 16px; }
+  .btn-main { background:var(--accent); color:#fff; }
+  .btn-main:hover { background:var(--accent2); }
+  .btn-sub { background:#eef1f4; color:#374151; }
+  .btn-danger { background:#fee2e2; color:#b91c1c; padding:6px 10px; font-size:13px; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .drop { border:2px dashed var(--line); border-radius:12px; padding:24px; text-align:center; color:var(--muted); background:#fafbfc; }
+  .thumbs { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+  .thumbs img { width:70px; height:90px; object-fit:cover; border-radius:6px; border:1px solid var(--line); }
+  table { width:100%; border-collapse:collapse; margin-top:8px; font-size:13px; }
+  th,td { border:1px solid var(--line); padding:4px; text-align:left; }
+  th { background:#f3f4f6; font-size:12px; }
+  td input { border:none; padding:6px; font-size:13px; }
+  td.num input { text-align:right; }
+  .status { font-size:13px; padding:10px 12px; border-radius:8px; margin-top:10px; display:none; }
+  .status.ok { background:#dcfce7; color:#166534; display:block; }
+  .status.err { background:#fee2e2; color:#991b1b; display:block; }
+  .status.info { background:#dbeafe; color:#1e40af; display:block; }
+  .hint { font-size:12px; color:var(--muted); margin-top:6px; }
+  details { margin-top:6px; } summary { cursor:pointer; font-size:13px; color:var(--muted); }
+</style>
+</head>
+<body>
+<header>🧾 レシート取込ツール</header>
+<main>
+
+  <div class="card">
+    <h2>① 設定（最初に1回）</h2>
+    <label>Gemini APIキー（無料・<a href="https://aistudio.google.com/app/apikey" target="_blank">ここで発行</a>）</label>
+    <input type="password" id="geminiKey" placeholder="AIza... から始まるキー">
+    <div style="height:10px"></div>
+    <label>GAS Web App の URL（receipt-endpoint.gs をデプロイして取得）</label>
+    <input type="text" id="gasUrl" placeholder="https://script.google.com/macros/s/..../exec">
+    <div style="height:10px"></div>
+    <label>合言葉（receipt-endpoint.gs の RECEIPT_TOKEN と同じ文字列）</label>
+    <input type="text" id="token" placeholder="例: myreceipt2026">
+    <div class="hint">入力すると自動保存され、次回から入力不要です。</div>
+  </div>
+
+  <div class="card">
+    <h2>② レシート写真</h2>
+    <div class="drop" id="drop">
+      ここに写真をドロップ、または
+      <label style="display:inline; color:var(--accent); cursor:pointer; text-decoration:underline;">
+        選択／撮影
+        <input type="file" id="file" accept="image/*" capture="environment" multiple hidden>
+      </label>
+      <div class="hint">複数枚OK。1枚＝1レシート（複数商品は自動で分けます）</div>
+    </div>
+    <div class="thumbs" id="thumbs"></div>
+    <div style="height:12px"></div>
+    <button class="btn-main" id="analyze" disabled>解析する</button>
+  </div>
+
+  <div class="card" id="resultCard" style="display:none;">
+    <h2>③ 確認・修正してから追加</h2>
+    <div class="hint">品名・金額・日付・仕入先を直せます。セカストは税込（税抜×1.1）に換算済み。</div>
+    <table id="tbl">
+      <thead><tr><th>仕入日</th><th>品名</th><th>金額(税込)</th><th>店名</th><th>仕入先</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <datalist id="suppliers">
+      <option value="tr-fa_トレファクファッション">
+      <option value="tr-eg_トレファクスタイル江古田店">
+      <option value="tr-ka_トレジャーファクトリー上板橋店">
+      <option value="tr-he_トレファクスタイル平和台店">
+      <option value="se-on_セカスト オンライン">
+      <option value="se-eg_セカンドストリートSS江古田店">
+      <option value="se-ne_セカンドストリートSS練馬インター店">
+      <option value="ha-to_ハードオフ戸田駅西口店">
+      <option value="do-ne_ドンキホーテ練馬店">
+    </datalist>
+    <div style="height:12px"></div>
+    <div class="row-flex">
+      <button class="btn-main" id="addBtn">管理表に追加</button>
+      <button class="btn-sub" id="copyBtn">タブ区切りでコピー</button>
+      <button class="btn-sub" id="addRow">行を手動追加</button>
+    </div>
+    <div class="status" id="status"></div>
+    <details>
+      <summary>「タブ区切りでコピー」について</summary>
+      <div class="hint">緊急用です。これを管理表に直接貼ると数式（手数料・原価・粗利）が入らないので、通常は「管理表に追加」を使ってください。</div>
+    </details>
+  </div>
+
+<script>
+const GEMINI_MODEL = 'gemini-2.5-flash'; // 動かない場合は 'gemini-2.0-flash' に変更
+const $ = id => document.getElementById(id);
+const store = {
+  get k(){return localStorage.getItem('gemini_api_key')||''},
+  set k(v){localStorage.setItem('gemini_api_key',v)},
+  get u(){return localStorage.getItem('receipt_gas_url')||''},
+  set u(v){localStorage.setItem('receipt_gas_url',v)},
+  get t(){return localStorage.getItem('receipt_token')||''},
+  set t(v){localStorage.setItem('receipt_token',v)},
+};
+$('geminiKey').value = store.k; $('gasUrl').value = store.u; $('token').value = store.t;
+$('geminiKey').oninput = e => store.k = e.target.value.trim();
+$('gasUrl').oninput   = e => store.u = e.target.value.trim();
+$('token').oninput    = e => store.t = e.target.value.trim();
+
+let images = []; // {dataUrl, base64, mime}
+
+function addImages(files){
+  [...files].filter(f=>f.type.startsWith('image/')).forEach(f=>{
+    const r = new FileReader();
+    r.onload = () => {
+      const dataUrl = r.result;
+      images.push({ dataUrl, base64: dataUrl.split(',')[1], mime: f.type });
+      renderThumbs();
+    };
+    r.readAsDataURL(f);
+  });
+}
+function renderThumbs(){
+  $('thumbs').innerHTML = images.map(i=>`<img src="${i.dataUrl}">`).join('');
+  $('analyze').disabled = images.length === 0;
+}
+$('file').onchange = e => addImages(e.target.files);
+const drop = $('drop');
+['dragover','dragenter'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.style.borderColor='#1f9d55';}));
+['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.style.borderColor='';}));
+drop.addEventListener('drop', e => addImages(e.dataTransfer.files));
+
+const PROMPT = `あなたは中古品店（トレジャーファクトリー/トレファク、セカンドストリート/2nd STREET/セカスト 等）のレシート読み取り係です。
+画像から「購入した商品」を抽出し、次の形式のJSONだけを返してください（前後の説明文やマークダウンは一切不要）。
+{"items":[{"name":"品名","amount":税込金額の整数(円),"date":"YYYY/MM/DD","store":"店舗名"}]}
+ルール:
+- 価格が税抜で表示されている場合は税込(税抜×1.1, 四捨五入)に直して amount に入れる。税込表示ならそのまま。
+- 合計・小計・お釣り・ポイント・会員番号・電話番号は商品に含めない。商品の明細行だけを対象にする。
+- name はレシート記載の商品名（ブランド・サイズ・色など付帯情報も含めてそのまま）。
+- date はレシートの購入日（営業日時/取引日時）。
+- store はレシート上部の店舗名。`;
+
+async function analyzeOne(img){
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(store.k)}`;
+  const body = {
+    contents:[{ parts:[ {text:PROMPT}, {inline_data:{mime_type:img.mime, data:img.base64}} ] }],
+    generationConfig:{ responseMimeType:"application/json", temperature:0 }
+  };
+  const res = await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(!res.ok){ throw new Error('Gemini APIエラー: '+res.status+' '+(await res.text()).slice(0,200)); }
+  const data = await res.json();
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+  const json = JSON.parse(text.match(/\{[\s\S]*\}/)[0]);
+  return json.items || [];
+}
+
+function supplierFromStore(s){
+  s = s || '';
+  if(/(2nd|セカンド|セカスト)/i.test(s)){
+    if(s.includes('江古田')) return 'se-eg_セカンドストリートSS江古田店';
+    if(s.includes('練馬')) return 'se-ne_セカンドストリートSS練馬インター店';
+    return 'se-on_セカスト オンライン';
+  }
+  if(/(トレファク|トレジャー|TREFAC|TREASURE)/i.test(s)){
+    if(s.includes('江古田')) return 'tr-eg_トレファクスタイル江古田店';
+    if(s.includes('上板橋')) return 'tr-ka_トレジャーファクトリー上板橋店';
+    if(s.includes('平和台')) return 'tr-he_トレファクスタイル平和台店';
+    return 'tr-fa_トレファクファッション';
+  }
+  if(/ハードオフ|HARD ?OFF/i.test(s)) return 'ha-to_ハードオフ戸田駅西口店';
+  if(/ドンキ/i.test(s)) return 'do-ne_ドンキホーテ練馬店';
+  return s; // 不明な店舗はそのまま表示（手で選び直す）
+}
+
+function rowHtml(it){
+  return `<tr>
+    <td><input value="${(it.date||'').replace(/"/g,'')}" style="width:96px"></td>
+    <td><input value="${(it.name||'').replace(/"/g,'&quot;')}"></td>
+    <td class="num"><input type="number" value="${it.amount||0}" style="width:80px"></td>
+    <td><input value="${(it.store||'').replace(/"/g,'&quot;')}" style="width:150px"></td>
+    <td><input list="suppliers" value="${(it.supplier||'').replace(/"/g,'&quot;')}" style="width:200px"></td>
+    <td><button class="btn-danger" onclick="this.closest('tr').remove()">削除</button></td>
+  </tr>`;
+}
+
+$('analyze').onclick = async () => {
+  if(!store.k){ showStatus('err','先に Gemini APIキー を入力してください'); return; }
+  $('analyze').disabled = true; $('analyze').textContent = '解析中…';
+  try{
+    let all = [];
+    for(const img of images){
+      const items = await analyzeOne(img);
+      items.forEach(it => it.supplier = supplierFromStore(it.store));
+      all = all.concat(items);
+    }
+    $('tbl').querySelector('tbody').innerHTML = all.map(rowHtml).join('');
+    $('resultCard').style.display = 'block';
+    showStatus('info', all.length+'件を読み取りました。内容を確認して「管理表に追加」を押してください。');
+  }catch(e){ showStatus('err', e.message); }
+  finally{ $('analyze').disabled = false; $('analyze').textContent = '解析する'; }
+};
+
+$('addRow').onclick = () => {
+  $('tbl').querySelector('tbody').insertAdjacentHTML('beforeend', rowHtml({date:'',name:'',amount:0,supplier:''}));
+};
+
+function collectRows(){
+  return [...$('tbl').querySelectorAll('tbody tr')].map(tr=>{
+    const c = tr.querySelectorAll('input');
+    return { date:c[0].value.trim(), name:c[1].value.trim(), amount:Number(c[2].value)||0, store:c[3].value.trim(), supplier:c[4].value.trim() };
+  }).filter(r=>r.name);
+}
+
+$('addBtn').onclick = async () => {
+  if(!store.u || !store.t){ showStatus('err','GASのURLと合言葉を設定してください'); return; }
+  const rows = collectRows();
+  if(!rows.length){ showStatus('err','追加する行がありません'); return; }
+  $('addBtn').disabled = true; $('addBtn').textContent='追加中…';
+  try{
+    // text/plain にしてCORSプリフライトを回避（GAS Web App向け）
+    const res = await fetch(store.u, { method:'POST',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body: JSON.stringify({ token: store.t, rows }) });
+    const out = await res.json();
+    if(out.ok){ showStatus('ok', out.added+'件を管理表に追加しました ✅'); $('tbl').querySelector('tbody').innerHTML=''; images=[]; renderThumbs(); }
+    else { showStatus('err','追加できませんでした: '+(out.error||'不明')); }
+  }catch(e){ showStatus('err','通信エラー: '+e.message+'（GASのデプロイ設定をご確認ください）'); }
+  finally{ $('addBtn').disabled=false; $('addBtn').textContent='管理表に追加'; }
+};
+
+$('copyBtn').onclick = () => {
+  const rows = collectRows();
+  // 品名/カテゴリー(空)/カテゴリー集計用(空)/仕入日/金額/仕入先/確認方法/確認内容(空)/販売ルート
+  const tsv = rows.map(r=>[r.name,'','',r.date,r.amount,r.supplier,'レシート',r.store,'メルカリ'].join('\t')).join('\n');
+  navigator.clipboard.writeText(tsv).then(()=>showStatus('info','コピーしました（数式は入りません。通常は「管理表に追加」を推奨）'));
+};
+
+function showStatus(type,msg){ const s=$('status'); s.className='status '+type; s.textContent=msg; }
+</script>
+</main>
+</body>
+</html>
