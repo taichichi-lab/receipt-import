@@ -2,7 +2,15 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="レシート取込">
+<meta name="theme-color" content="#111827">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="icon" href="icon.svg">
 <title>レシート取込ツール（せどり管理表）</title>
 <style>
   :root { --bg:#f5f6f8; --card:#fff; --line:#e2e5ea; --accent:#1f9d55; --accent2:#147a40; --muted:#6b7280; }
@@ -78,17 +86,7 @@
       <thead><tr><th>仕入日</th><th>品名</th><th>金額(税込)</th><th>店名</th><th>仕入先</th><th></th></tr></thead>
       <tbody></tbody>
     </table>
-    <datalist id="suppliers">
-      <option value="tr-fa_トレファクファッション">
-      <option value="tr-eg_トレファクスタイル江古田店">
-      <option value="tr-ka_トレジャーファクトリー上板橋店">
-      <option value="tr-he_トレファクスタイル平和台店">
-      <option value="se-on_セカスト オンライン">
-      <option value="se-eg_セカンドストリートSS江古田店">
-      <option value="se-ne_セカンドストリートSS練馬インター店">
-      <option value="ha-to_ハードオフ戸田駅西口店">
-      <option value="do-ne_ドンキホーテ練馬店">
-    </datalist>
+    <datalist id="suppliers"></datalist>
     <div style="height:12px"></div>
     <div class="row-flex">
       <button class="btn-main" id="addBtn">管理表に追加</button>
@@ -165,22 +163,66 @@ async function analyzeOne(img){
   return json.items || [];
 }
 
+// 仕入先リスト：起動時にGAS経由で「仕入先詳細」シートから取得する（新店を足せば自動反映）。
+// 下は取得できない時の予備リスト（管理表のプルダウン値＝検索キー_仕入先名）。
+let SUPPLIERS = [
+  {key:'tr-ka', name:'トレジャーファクトリー上板橋店'},
+  {key:'tr-he', name:'トレファクスタイル平和台店'},
+  {key:'ha-to', name:'ハードオフ戸田駅西口店'},
+  {key:'se-ne', name:'セカンドストリート練馬インター店'},
+  {key:'se-on', name:'セカスト オンライン'},
+  {key:'do-ne', name:'ドンキホーテ練馬店'},
+  {key:'tr-fa', name:'トレファクファッション'},
+  {key:'ko-me', name:'メルカリ'},
+  {key:'al-ne', name:'アルペン 練馬関町店'},
+  {key:'se-eg', name:'セカンドストリート江古田店'},
+  {key:'ko-hu', name:'フリマ'},
+  {key:'tr-eg', name:'トレファクスタイル江古田店'},
+  {key:'ha-na', name:'モードオフ 成増駅南口店'},
+  {key:'re-ra', name:'Tickle Tickle ララガーデン川口店'},
+  {key:'tr-ne', name:'トレジャーファクトリー練馬店'},
+  {key:'se-to', name:'セカンドストリート戸田T-fronte店'},
+  {key:'se-hu', name:'セカンドストリート東浦和店'},
+  {key:'tr-hu', name:'トレジャーファクトリー東浦和店'},
+  {key:'tr-ks', name:'トレファクスタイル川口芝産業道路店'},
+  {key:'se-wa', name:'セカンドストリート蕨店'},
+];
+function populateSuppliers(){
+  $('suppliers').innerHTML = SUPPLIERS.map(m=>`<option value="${m.key}_${m.name}">`).join('');
+}
+populateSuppliers();
+async function loadSuppliers(){
+  if(!store.u) return;
+  try{
+    const res = await fetch(store.u, { method:'GET' });
+    const out = await res.json();
+    if(out.ok && Array.isArray(out.suppliers) && out.suppliers.length){
+      SUPPLIERS = out.suppliers; populateSuppliers();
+    }
+  }catch(e){ /* 取れなければ予備リストのまま */ }
+}
+loadSuppliers();
+
+function coreArea_(name){
+  return String(name)
+    .replace(/セカンドストリート|セカスト|トレジャーファクトリー|トレファクスタイル|トレファクファッション|トレファク|ハードオフ|モードオフ|ドンキホーテ|アルペン|オンライン|店/g,'')
+    .replace(/\s/g,'');
+}
 function supplierFromStore(s){
-  s = s || '';
-  if(/(2nd|セカンド|セカスト)/i.test(s)){
-    if(s.includes('江古田')) return 'se-eg_セカンドストリートSS江古田店';
-    if(s.includes('練馬')) return 'se-ne_セカンドストリートSS練馬インター店';
-    return 'se-on_セカスト オンライン';
+  s = (s||'').replace(/\s/g,'');
+  if(!s) return '';
+  let pre = '';
+  if(/(2nd|セカンド|セカスト)/i.test(s)) pre = 'se';
+  else if(/(トレファク|トレジャー|TREFAC|TREASURE)/i.test(s)) pre = 'tr';
+  else if(/(ハードオフ|モードオフ)/i.test(s)) pre = 'ha';
+  else if(/ドンキ/i.test(s)) pre = 'do';
+  else if(/アルペン/i.test(s)) pre = 'al';
+  for(const m of SUPPLIERS){
+    if(pre && !m.key.startsWith(pre)) continue;
+    const core = coreArea_(m.name);
+    if(core.length >= 2 && s.includes(core.slice(0,2))) return m.key + '_' + m.name;
   }
-  if(/(トレファク|トレジャー|TREFAC|TREASURE)/i.test(s)){
-    if(s.includes('江古田')) return 'tr-eg_トレファクスタイル江古田店';
-    if(s.includes('上板橋')) return 'tr-ka_トレジャーファクトリー上板橋店';
-    if(s.includes('平和台')) return 'tr-he_トレファクスタイル平和台店';
-    return 'tr-fa_トレファクファッション';
-  }
-  if(/ハードオフ|HARD ?OFF/i.test(s)) return 'ha-to_ハードオフ戸田駅西口店';
-  if(/ドンキ/i.test(s)) return 'do-ne_ドンキホーテ練馬店';
-  return s; // 不明な店舗はそのまま表示（手で選び直す）
+  return ''; // 自動判定できなければ空。プルダウンから選んでもらう
 }
 
 function rowHtml(it){
