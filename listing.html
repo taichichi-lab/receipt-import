@@ -48,6 +48,13 @@
   canvas { max-width:100%; border-radius:10px; border:1px solid var(--line); }
   .pair { display:flex; gap:8px; }
   .pair > div { flex:1; }
+  .set-head { display:flex; align-items:center; justify-content:space-between; cursor:pointer; }
+  .set-head h2 { margin:0; }
+  .chev { color:var(--muted); font-size:13px; white-space:nowrap; }
+  .pickrow { display:flex; gap:10px; }
+  .bigpick { flex:1; background:#eef1f4; color:#1f2937; border:1px solid var(--line); border-radius:12px; padding:20px 10px; font-size:16px; font-weight:bold; display:flex; flex-direction:column; align-items:center; gap:6px; cursor:pointer; }
+  .bigpick .ic { font-size:28px; }
+  .bigpick:active { background:#e2e8f0; }
 </style>
 </head>
 <body>
@@ -55,22 +62,27 @@
 <main>
 
   <div class="card">
-    <h2>① 設定</h2>
+    <div class="set-head" id="setHead">
+      <h2>① 設定<span id="setDone" style="color:var(--accent); display:none;"> ✓</span></h2>
+      <span class="chev" id="setChev">▲ 閉じる</span>
+    </div>
+    <div id="setBody">
     <label>Gemini APIキー（レシートツールと同じキーでOK）</label>
     <input type="password" id="geminiKey" placeholder="AQ... / AIza... のキー">
     <div class="hint">レシートツールと同じ端末なら、すでに入っているはずです。</div>
+    </div>
   </div>
 
   <div class="card">
     <h2>② 商品写真</h2>
-    <div class="drop" id="drop">
-      写真をドロップ、または
-      <label style="display:inline; color:var(--accent); cursor:pointer; text-decoration:underline;">選択／撮影
-        <input type="file" id="file" accept="image/*" capture="environment" multiple hidden>
-      </label>
-      <div class="hint">全体・ブランドタグ・洗濯タグなど複数枚OK。サムネにしたい写真をタップで選べます。</div>
+    <div class="pickrow">
+      <button class="bigpick" id="btnCam"><span class="ic">📷</span>撮影</button>
+      <button class="bigpick" id="btnLib"><span class="ic">🖼️</span>アルバムから選択</button>
     </div>
+    <input type="file" id="fileCam" accept="image/*" capture="environment" multiple hidden>
+    <input type="file" id="fileLib" accept="image/*" multiple hidden>
     <div class="thumbs" id="thumbs"></div>
+    <div class="hint">全体・ブランドタグ・洗濯タグなど複数枚OK。サムネにしたい写真をタップで選べます。</div>
     <div style="height:12px"></div>
     <button class="btn-main" id="analyze" disabled>出品文を生成</button>
     <div class="status" id="status"></div>
@@ -144,11 +156,19 @@ function renderThumbs(){
   $('thumbs').querySelectorAll('img').forEach(el=>el.onclick=()=>{ thumbIndex=+el.dataset.i; renderThumbs(); if(gen) drawThumb(); });
   $('analyze').disabled = images.length===0;
 }
-$('file').onchange = e => addImages(e.target.files);
-const drop=$('drop');
-['dragover','dragenter'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.style.borderColor='#1f9d55';}));
-['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.style.borderColor='';}));
-drop.addEventListener('drop', e=>addImages(e.dataTransfer.files));
+$('btnCam').onclick = ()=>$('fileCam').click();
+$('btnLib').onclick = ()=>$('fileLib').click();
+$('fileCam').onchange = e => addImages(e.target.files);
+$('fileLib').onchange = e => addImages(e.target.files);
+
+function settingsComplete(){ return !!localStorage.getItem('gemini_api_key'); }
+function setCollapsed(c){
+  $('setBody').style.display = c ? 'none' : 'block';
+  $('setChev').textContent = c ? '▼ 開く' : '▲ 閉じる';
+  $('setDone').style.display = settingsComplete() ? 'inline' : 'none';
+}
+$('setHead').onclick = ()=> setCollapsed($('setBody').style.display !== 'none');
+setCollapsed(settingsComplete());
 
 const PROMPT = `あなたは中古衣類をメルカリに出品するプロです。商品写真（全体やブランドタグ・洗濯タグ）を見て、出品情報を作ります。
 次のJSONだけを返してください（説明やマークダウン不要）。
