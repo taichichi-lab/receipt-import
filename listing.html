@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="出品アシスト">
+<meta name="theme-color" content="#111827">
+<link rel="manifest" href="manifest-listing.json">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="icon" href="icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700&family=Noto+Sans+JP:wght@500;700&display=swap" rel="stylesheet">
+<title>メルカリ出品アシスタント</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --line:#e2e5ea; --accent:#1f9d55; --accent2:#147a40; --muted:#6b7280; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,"Hiragino Kaku Gothic ProN","Yu Gothic",sans-serif; background:var(--bg); color:#1f2937; line-height:1.6; }
+  header { background:#111827; color:#fff; padding:14px 16px; font-size:18px; font-weight:bold; }
+  main { max-width:760px; margin:0 auto; padding:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px; }
+  .card h2 { font-size:15px; margin:0 0 10px; }
+  label { font-size:13px; color:var(--muted); display:block; margin:8px 0 4px; }
+  input[type=text], input[type=password], input[type=number], textarea {
+    width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:8px; font-size:14px; font-family:inherit; }
+  textarea { resize:vertical; }
+  button { cursor:pointer; border:none; border-radius:8px; font-size:14px; font-weight:bold; padding:10px 16px; }
+  .btn-main { background:var(--accent); color:#fff; }
+  .btn-main:hover { background:var(--accent2); }
+  .btn-sub { background:#eef1f4; color:#374151; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .drop { border:2px dashed var(--line); border-radius:12px; padding:22px; text-align:center; color:var(--muted); background:#fafbfc; }
+  .thumbs { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+  .thumbs img { width:74px; height:74px; object-fit:cover; border-radius:8px; border:2px solid transparent; cursor:pointer; }
+  .thumbs img.sel { border-color:var(--accent); }
+  .row-flex { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .grid4 { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+  .field { font-size:13px; }
+  .field b { color:#111827; }
+  .status { font-size:13px; padding:10px 12px; border-radius:8px; margin-top:10px; display:none; }
+  .status.ok { background:#dcfce7; color:#166534; display:block; }
+  .status.err { background:#fee2e2; color:#991b1b; display:block; }
+  .status.info { background:#dbeafe; color:#1e40af; display:block; }
+  .hint { font-size:12px; color:var(--muted); margin-top:6px; }
+  canvas { max-width:100%; border-radius:10px; border:1px solid var(--line); }
+  .pair { display:flex; gap:8px; }
+  .pair > div { flex:1; }
+</style>
+</head>
+<body>
+<header>🏷️ メルカリ出品アシスタント</header>
+<main>
+
+  <div class="card">
+    <h2>① 設定</h2>
+    <label>Gemini APIキー（レシートツールと同じキーでOK）</label>
+    <input type="password" id="geminiKey" placeholder="AQ... / AIza... のキー">
+    <div class="hint">レシートツールと同じ端末なら、すでに入っているはずです。</div>
+  </div>
+
+  <div class="card">
+    <h2>② 商品写真</h2>
+    <div class="drop" id="drop">
+      写真をドロップ、または
+      <label style="display:inline; color:var(--accent); cursor:pointer; text-decoration:underline;">選択／撮影
+        <input type="file" id="file" accept="image/*" capture="environment" multiple hidden>
+      </label>
+      <div class="hint">全体・ブランドタグ・洗濯タグなど複数枚OK。サムネにしたい写真をタップで選べます。</div>
+    </div>
+    <div class="thumbs" id="thumbs"></div>
+    <div style="height:12px"></div>
+    <button class="btn-main" id="analyze" disabled>出品文を生成</button>
+    <div class="status" id="status"></div>
+  </div>
+
+  <div class="card" id="measCard" style="display:none;">
+    <h2>③ 採寸（cm）<span class="hint" style="font-weight:normal;">写真から測れないので入力してください</span></h2>
+    <div id="measFields"></div>
+    <div style="height:8px"></div>
+    <div class="row-flex">
+      <button class="btn-sub" id="addMeas">＋ 項目を追加</button>
+      <button class="btn-sub" id="rebuild">説明文を作り直す</button>
+    </div>
+    <div class="hint">項目名も直接編集できます（×で削除）。入力後「説明文を作り直す」で反映。</div>
+  </div>
+
+  <div class="card" id="resultCard" style="display:none;">
+    <h2>④ 出品情報</h2>
+    <div id="meta" class="field"></div>
+    <label>タイトル <span class="hint" style="font-weight:normal;" id="titleLen"></span></label>
+    <input type="text" id="title">
+    <div style="height:6px"></div>
+    <button class="btn-sub" id="copyTitle">タイトルをコピー</button>
+
+    <label style="margin-top:14px;">説明文</label>
+    <textarea id="desc" rows="20"></textarea>
+    <div style="height:6px"></div>
+    <button class="btn-main" id="copyDesc">説明文をコピー</button>
+  </div>
+
+  <div class="card" id="thumbCard" style="display:none;">
+    <h2>⑤ 1枚目サムネ（写真は無加工・文字だけ重ねます）</h2>
+    <div class="pair">
+      <div><label>1段目（ブランド）</label><input type="text" id="ovBrand"></div>
+      <div><label>2段目（サイズ）</label><input type="text" id="ovSize"></div>
+    </div>
+    <div style="height:10px"></div>
+    <canvas id="canvas" width="1080" height="1080"></canvas>
+    <div style="height:10px"></div>
+    <div class="row-flex">
+      <button class="btn-sub" id="redraw">作り直す</button>
+      <button class="btn-main" id="download">画像を保存</button>
+    </div>
+    <div class="hint">左上のサムネ用写真をタップで切り替えられます。元の写真の画素は変えず、左上に文字を重ねるだけです。</div>
+  </div>
+
+<script>
+const GEMINI_MODEL = 'gemini-2.5-flash';
+const $ = id => document.getElementById(id);
+$('geminiKey').value = localStorage.getItem('gemini_api_key') || '';
+$('geminiKey').oninput = e => localStorage.setItem('gemini_api_key', e.target.value.trim());
+
+let images = [];        // {dataUrl, base64, mime, img}
+let thumbIndex = 0;
+let gen = null;         // Geminiの生成結果
+
+function addImages(files){
+  [...files].filter(f=>f.type.startsWith('image/')).forEach(f=>{
+    const r = new FileReader();
+    r.onload = () => {
+      const dataUrl = r.result;
+      const img = new Image(); img.src = dataUrl;
+      images.push({ dataUrl, base64:dataUrl.split(',')[1], mime:f.type, img });
+      renderThumbs();
+    };
+    r.readAsDataURL(f);
+  });
+}
+function renderThumbs(){
+  $('thumbs').innerHTML = images.map((i,idx)=>`<img src="${i.dataUrl}" data-i="${idx}" class="${idx===thumbIndex?'sel':''}">`).join('');
+  $('thumbs').querySelectorAll('img').forEach(el=>el.onclick=()=>{ thumbIndex=+el.dataset.i; renderThumbs(); if(gen) drawThumb(); });
+  $('analyze').disabled = images.length===0;
+}
+$('file').onchange = e => addImages(e.target.files);
+const drop=$('drop');
+['dragover','dragenter'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.style.borderColor='#1f9d55';}));
+['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.style.borderColor='';}));
+drop.addEventListener('drop', e=>addImages(e.dataTransfer.files));
+
+const PROMPT = `あなたは中古衣類をメルカリに出品するプロです。商品写真（全体やブランドタグ・洗濯タグ）を見て、出品情報を作ります。
+次のJSONだけを返してください（説明やマークダウン不要）。
+{
+ "title":"40字以内。ブランド+アイテム+特徴+サイズ。検索される語を含める",
+ "category":"メルカリのカテゴリを階層で（例: メンズ > ジャケット/アウター > マウンテンパーカー）",
+ "condition":"次の6つから1つ: 新品、未使用に近い、目立った傷や汚れなし、やや傷や汚れあり、傷や汚れあり、全体的に状態が悪い",
+ "brand":"ブランド名（英語（カタカナ）の形。例: patagonia（パタゴニア））",
+ "item":"アイテム名。別名があれば / で併記（例: トレントシェル プルオーバー / マウンテンパーカー / ナイロンジャケット）",
+ "color":"色（バイカラーは × で）",
+ "size":"サイズ表記＋日本サイズ相当や着用目安（タグの表記を尊重。例: メンズ XS（日本サイズS相当 / 目安160〜168cm・細身〜標準体型の方に◎））",
+ "material":"素材（タグから。独自素材名があれば併記）",
+ "status":"状態の説明文。良い点と難（汚れ・傷）を正直に。写真から分かる範囲で。",
+ "hooks":["▼ で始まる魅力的な一文を3つ。用途・季節・希少性・機能で購買意欲を刺激。誇張しすぎない"],
+ "hashtags":["#で始まるタグ10〜14個。ブランド英/カナ・アイテム・用途・季節など"],
+ "meas_title":"採寸セクション見出し（衣類は『平置き実寸』、バッグ/靴/小物は『サイズ』）",
+ "meas_fields":["この商品に合った標準的な採寸項目名の配列。トップス→肩幅,身幅,着丈,袖丈 / パンツ→ウエスト,股上,股下,わたり幅,裾幅 / スカート→ウエスト,着丈,ヒップ / ワンピース→肩幅,身幅,着丈 / バッグ→高さ,幅,マチ,持ち手の長さ / 靴→ソール全長,横幅 / 帽子→頭周り など"],
+ "brand_en":"サムネ用のブランド英字表記（例: patagonia / Engineered Garments）",
+ "size_short":"サムネ用の短いサイズ表記（例: Size S / XS）",
+ "price_low":整数, "price_high":整数
+}
+ルール: タグ写真からブランド・サイズ・素材・生産国を正確に読む。読めない項目は推測しすぎず空に。嘘や過度な断定はしない。状態の難は隠さない。titleは40字以内厳守。`;
+
+async function callGemini(){
+  const key = localStorage.getItem('gemini_api_key') || '';
+  if(!key) throw new Error('Gemini APIキーを入力してください');
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(key)}`;
+  const parts = [{text:PROMPT}, ...images.map(i=>({inline_data:{mime_type:i.mime, data:i.base64}}))];
+  const body = { contents:[{parts}], generationConfig:{responseMimeType:"application/json", temperature:0.4} };
+  const res = await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(!res.ok) throw new Error('Gemini APIエラー: '+res.status+' '+(await res.text()).slice(0,200));
+  const data = await res.json();
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+  return JSON.parse(text.match(/\{[\s\S]*\}/)[0]);
+}
+
+const BOILER_SHIP = `◆発送・梱包
+・なるべく24時間以内に発送します。
+・水濡れ防止対策のうえコンパクトに梱包します（畳みジワはご了承ください）。
+・リサイクル資材を使用する場合があります。
+・予告なくゆうゆうメルカリ便に変更する場合があります。`;
+const BOILER_NOTE = `◆ご注意
+中古品のため、完璧をお求めの方はご遠慮ください。
+商品名、説明文などは出品者にて調べた内容です。実際と異なる場合があります。
+写真に写っている付属品、状態がすべてです。気になる点はお気軽にコメントください。`;
+
+function measRowHtml(label,val){
+  return `<div class="measrow" style="display:flex; gap:8px; margin-bottom:6px; align-items:center;">
+    <input class="measLabel" value="${String(label||'').replace(/"/g,'&quot;')}" placeholder="項目名" style="flex:0 0 38%;">
+    <input class="measVal" value="${String(val||'').replace(/"/g,'&quot;')}" placeholder="cm" style="flex:1;">
+    <button type="button" class="btn-sub delMeas" style="padding:8px 12px;">×</button>
+  </div>`;
+}
+function bindMeasDel(){
+  $('measFields').querySelectorAll('.delMeas').forEach(b=>b.onclick=()=>b.closest('.measrow').remove());
+}
+function renderMeas(){
+  const fields = (gen.meas_fields && gen.meas_fields.length) ? gen.meas_fields : ['肩幅','身幅','着丈','袖丈'];
+  $('measFields').innerHTML = fields.map(f=>measRowHtml(f,'')).join('');
+  bindMeasDel();
+}
+
+function buildDescription(){
+  const g = gen;
+  const meas = [...document.querySelectorAll('#measFields .measrow')].map(r=>{
+    const label = r.querySelector('.measLabel').value.trim();
+    const val = r.querySelector('.measVal').value.trim();
+    return label ? `・${label}：${val||'__'}` : null;
+  }).filter(Boolean).join('\n');
+  const measTitle = g.meas_title || '平置き実寸';
+
+  const hooks = (g.hooks||[]).join('\n');
+  const tags = (g.hashtags||[]).join(' ');
+  return `${hooks}
+
+◆商品詳細
+【ブランド】${g.brand||''}
+【アイテム】${g.item||''}
+【カラー】${g.color||''}
+【サイズ】${g.size||''}
+【素材】${g.material||''}
+【状態】${g.status||''}
+
+◆${measTitle}（cm）
+${meas}
+※素人採寸のため多少の誤差はご容赦ください。
+
+${BOILER_SHIP}
+
+${BOILER_NOTE}
+
+${tags}`;
+}
+
+function showResult(){
+  const g = gen;
+  $('meta').innerHTML =
+    `<b>カテゴリ：</b>${g.category||'-'}<br><b>商品の状態：</b>${g.condition||'-'}<br>`+
+    `<b>推奨価格：</b>¥${(g.price_low||0).toLocaleString()} 〜 ¥${(g.price_high||0).toLocaleString()}`;
+  $('title').value = g.title || '';
+  updateTitleLen();
+  renderMeas();
+  $('desc').value = buildDescription();
+  $('ovBrand').value = g.brand_en || (g.brand||'').replace(/（.*$/,'').trim();
+  $('ovSize').value = g.size_short || '';
+  $('measCard').style.display='block';
+  $('resultCard').style.display='block';
+  $('thumbCard').style.display='block';
+  drawThumb();
+}
+
+function updateTitleLen(){ const n=[...$('title').value].length; $('titleLen').textContent = n+' / 40字'+(n>40?' ⚠️超過':''); }
+$('title').oninput = updateTitleLen;
+
+$('analyze').onclick = async ()=>{
+  $('analyze').disabled=true; $('analyze').textContent='生成中…';
+  try{ gen = await callGemini(); showResult(); showStatus('ok','生成しました。採寸を入れて「作り直す」、内容を確認してコピーしてください。'); }
+  catch(e){ showStatus('err', e.message); }
+  finally{ $('analyze').disabled=false; $('analyze').textContent='出品文を生成'; }
+};
+$('addMeas').onclick = ()=>{ $('measFields').insertAdjacentHTML('beforeend', measRowHtml('','')); bindMeasDel(); };
+$('rebuild').onclick = ()=>{ if(gen){ $('desc').value=buildDescription(); showStatus('info','採寸を反映しました。'); } };
+$('redraw').onclick = ()=>drawThumb();
+$('copyTitle').onclick = ()=>navigator.clipboard.writeText($('title').value).then(()=>showStatus('info','タイトルをコピーしました'));
+$('copyDesc').onclick = ()=>navigator.clipboard.writeText($('desc').value).then(()=>showStatus('info','説明文をコピーしました'));
+$('ovBrand').oninput = ()=>drawThumb();
+$('ovSize').oninput = ()=>drawThumb();
+
+async function drawThumb(){
+  if(!images[thumbIndex]) return;
+  const im = images[thumbIndex].img;
+  if(!im.complete){ im.onload=()=>drawThumb(); return; }
+  try{ await document.fonts.load('700 60px Montserrat'); await document.fonts.load('700 60px "Noto Sans JP"'); }catch(e){}
+  const S=1080, ctx=$('canvas').getContext('2d');
+  const side=Math.min(im.naturalWidth, im.naturalHeight);
+  const sx=(im.naturalWidth-side)/2, sy=(im.naturalHeight-side)/2;
+  ctx.clearRect(0,0,S,S);
+  ctx.drawImage(im, sx, sy, side, side, 0, 0, S, S);
+
+  const pad=52, l1=$('ovBrand').value.trim(), l2=$('ovSize').value.trim();
+  const f1='700 58px Montserrat, "Noto Sans JP", sans-serif';
+  const f2='700 46px Montserrat, "Noto Sans JP", sans-serif';
+  ctx.textBaseline='top';
+  ctx.font=f1; const w1=ctx.measureText(l1).width;
+  ctx.font=f2; const w2=ctx.measureText(l2).width;
+  const boxW=Math.max(w1,w2)+36, boxH=(l2?58+22+46:58)+28;
+  ctx.fillStyle='rgba(18,18,18,0.40)';
+  roundRect(ctx, pad-18, pad-14, boxW, boxH, 14); ctx.fill();
+  ctx.fillStyle='#ffffff';
+  ctx.font=f1; ctx.fillText(l1, pad, pad);
+  if(l2){ ctx.font=f2; ctx.fillText(l2, pad, pad+72); }
+}
+function roundRect(ctx,x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+
+$('download').onclick = ()=>{
+  $('canvas').toBlob(b=>{
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(b);
+    a.download=($('ovBrand').value.trim()||'item').replace(/[\\/:*?"<>|]/g,'')+'_1.jpg';
+    a.click();
+  }, 'image/jpeg', 0.92);
+};
+
+function showStatus(type,msg){ const s=$('status'); s.className='status '+type; s.textContent=msg; }
+</script>
+</main>
+</body>
+</html>
