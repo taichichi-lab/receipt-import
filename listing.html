@@ -117,18 +117,20 @@
 
   <div class="card" id="thumbCard" style="display:none;">
     <h2>⑤ 1枚目サムネ（写真は無加工・文字だけ重ねます）</h2>
-    <div class="pair">
+    <label>サムネにする写真（タップで切替）</label>
+    <div class="thumbs" id="thumbPick"></div>
+    <button class="btn-sub" id="addThumbPhoto" style="margin-top:6px;">＋ 写真を追加／差し替え</button>
+    <div class="pair" style="margin-top:12px;">
       <div><label>1段目（ブランド）</label><input type="text" id="ovBrand"></div>
       <div><label>2段目（サイズ）</label><input type="text" id="ovSize"></div>
     </div>
+    <label style="margin-top:10px;">文字サイズ <span id="fontSizeOut" class="hint" style="font-weight:normal;"></span></label>
+    <input type="range" id="fontSize" min="40" max="160" value="80" step="2" style="width:100%;">
     <div style="height:10px"></div>
     <canvas id="canvas" width="1080" height="1080"></canvas>
     <div style="height:10px"></div>
-    <div class="row-flex">
-      <button class="btn-sub" id="redraw">作り直す</button>
-      <button class="btn-main" id="download">画像を保存</button>
-    </div>
-    <div class="hint">左上のサムネ用写真をタップで切り替えられます。元の写真の画素は変えず、左上に文字を重ねるだけです。</div>
+    <button class="btn-main" id="download">画像を保存</button>
+    <div class="hint">元の写真の画素は変えず、左上に文字を重ねるだけです。スライダーで文字サイズを調整できます。</div>
   </div>
 
 <script>
@@ -154,8 +156,10 @@ function addImages(files){
   });
 }
 function renderThumbs(){
-  $('thumbs').innerHTML = images.map((i,idx)=>`<img src="${i.dataUrl}" data-i="${idx}" class="${idx===thumbIndex?'sel':''}">`).join('');
-  $('thumbs').querySelectorAll('img').forEach(el=>el.onclick=()=>{ thumbIndex=+el.dataset.i; renderThumbs(); if(gen) drawThumb(); });
+  const html = images.map((i,idx)=>`<img src="${i.dataUrl}" data-i="${idx}" class="${idx===thumbIndex?'sel':''}">`).join('');
+  $('thumbs').innerHTML = html;
+  const tp = $('thumbPick'); if(tp) tp.innerHTML = html;
+  document.querySelectorAll('#thumbs img, #thumbPick img').forEach(el=>el.onclick=()=>{ thumbIndex=+el.dataset.i; renderThumbs(); if(gen) drawThumb(); });
   $('analyze').disabled = images.length===0;
 }
 $('btnCam').onclick = ()=>$('fileCam').click();
@@ -297,11 +301,13 @@ $('analyze').onclick = async ()=>{
 };
 $('addMeas').onclick = ()=>{ $('measFields').insertAdjacentHTML('beforeend', measRowHtml('','')); bindMeasDel(); };
 $('rebuild').onclick = ()=>{ if(gen){ $('desc').value=buildDescription(); showStatus('info','採寸を反映しました。'); } };
-$('redraw').onclick = ()=>drawThumb();
+$('addThumbPhoto').onclick = ()=>$('fileLib').click();
 $('copyTitle').onclick = ()=>navigator.clipboard.writeText($('title').value).then(()=>showStatus('info','タイトルをコピーしました'));
 $('copyDesc').onclick = ()=>navigator.clipboard.writeText($('desc').value).then(()=>showStatus('info','説明文をコピーしました'));
 $('ovBrand').oninput = ()=>drawThumb();
 $('ovSize').oninput = ()=>drawThumb();
+$('fontSize').oninput = ()=>{ $('fontSizeOut').textContent = $('fontSize').value+'px'; drawThumb(); };
+$('fontSizeOut').textContent = $('fontSize').value+'px';
 
 async function drawThumb(){
   if(!images[thumbIndex]) return;
@@ -315,17 +321,18 @@ async function drawThumb(){
   ctx.drawImage(im, sx, sy, side, side, 0, 0, S, S);
 
   const pad=52, l1=$('ovBrand').value.trim(), l2=$('ovSize').value.trim();
-  const f1='700 58px Montserrat, "Noto Sans JP", sans-serif';
-  const f2='700 46px Montserrat, "Noto Sans JP", sans-serif';
+  const fs1 = +($('fontSize').value) || 80, fs2 = Math.round(fs1*0.78), gap = Math.round(fs1*1.25);
+  const f1 = `700 ${fs1}px Montserrat, "Noto Sans JP", sans-serif`;
+  const f2 = `700 ${fs2}px Montserrat, "Noto Sans JP", sans-serif`;
   ctx.textBaseline='top';
   ctx.font=f1; const w1=ctx.measureText(l1).width;
-  ctx.font=f2; const w2=ctx.measureText(l2).width;
-  const boxW=Math.max(w1,w2)+36, boxH=(l2?58+22+46:58)+28;
+  ctx.font=f2; const w2=l2?ctx.measureText(l2).width:0;
+  const boxW=Math.max(w1,w2)+36, boxH=(l2? gap+fs2 : fs1)+28;
   ctx.fillStyle='rgba(18,18,18,0.40)';
   roundRect(ctx, pad-18, pad-14, boxW, boxH, 14); ctx.fill();
   ctx.fillStyle='#ffffff';
   ctx.font=f1; ctx.fillText(l1, pad, pad);
-  if(l2){ ctx.font=f2; ctx.fillText(l2, pad, pad+72); }
+  if(l2){ ctx.font=f2; ctx.fillText(l2, pad, pad+gap); }
 }
 function roundRect(ctx,x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
 
