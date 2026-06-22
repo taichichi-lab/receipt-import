@@ -1,11 +1,12 @@
 {
+  "id": "/receipt-import/listing.html",
   "name": "メルカリ出品アシスタント",
   "short_name": "出品アシスト",
   "start_url": "listing.html",
-  "scope": ".",
+  "scope": "listing.html",
   "display": "standalone",
   "background_color": "#f5f6f8",
-  "theme_color": "#111827",
+  "theme_color": "#E23B30",
   "icons": [
     { "src": "icon-listing.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
   ]

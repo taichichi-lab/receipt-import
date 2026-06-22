@@ -1,8 +1,9 @@
 {
+  "id": "/receipt-import/index.html",
   "name": "レシート取込ツール",
   "short_name": "レシート取込",
-  "start_url": ".",
-  "scope": ".",
+  "start_url": "index.html",
+  "scope": "index.html",
   "display": "standalone",
   "background_color": "#f5f6f8",
   "theme_color": "#111827",
