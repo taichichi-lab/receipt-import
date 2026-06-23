@@ -86,7 +86,10 @@
     <label style="margin-top:12px;">補足メモ（任意・この内容を反映して生成します）</label>
     <textarea id="memo" rows="3" placeholder="状態の難や特徴など。例：左袖に小さなシミ／未使用に近い／喫煙・ペットなし／採寸メモ など"></textarea>
     <div style="height:12px"></div>
-    <button class="btn-main" id="analyze" disabled>出品文を生成</button>
+    <div class="row-flex">
+      <button class="btn-main" id="analyze" disabled>出品文を生成</button>
+      <button class="btn-sub" id="resetBtn">🔄 新しい商品（クリア）</button>
+    </div>
     <div class="status" id="status"></div>
   </div>
 
@@ -167,6 +170,18 @@ $('btnLib').onclick = ()=>$('fileLib').click();
 $('fileCam').onchange = e => addImages(e.target.files);
 $('fileLib').onchange = e => addImages(e.target.files);
 
+function resetAll(){
+  images = []; thumbIndex = 0; gen = null;
+  $('fileCam').value=''; $('fileLib').value=''; $('memo').value='';
+  renderThumbs();
+  ['measCard','resultCard','thumbCard'].forEach(id=>$(id).style.display='none');
+  $('title').value=''; $('desc').value=''; $('meta').innerHTML='';
+  $('ovBrand').value=''; $('ovSize').value=''; $('measFields').innerHTML='';
+  showStatus('info','クリアしました。次の商品の写真をどうぞ。');
+  window.scrollTo({top:0, behavior:'smooth'});
+}
+$('resetBtn').onclick = resetAll;
+
 function settingsComplete(){ return !!localStorage.getItem('gemini_api_key'); }
 function setCollapsed(c){
   $('setBody').style.display = c ? 'none' : 'block';
@@ -179,16 +194,16 @@ setCollapsed(settingsComplete());
 const PROMPT = `あなたは中古衣類をメルカリに出品するプロです。商品写真（全体やブランドタグ・洗濯タグ）を見て、出品情報を作ります。
 次のJSONだけを返してください（説明やマークダウン不要）。
 {
- "title":"40字以内。ブランド+アイテム+特徴+サイズ。検索される語を含める",
+ "title":"先頭に【】のアピールを1つだけ付け、その後にブランド+アイテム+特徴+サイズを続ける。全体で40字以内。【】は状態（新品未使用/未使用に近い/極美品/美品）か人気・希少（希少/人気/定番）から、その商品に最も合うものを1つ選ぶ。『完売品』『廃番』は補足メモに明記がある場合のみ使用し、無ければ絶対に使わない。検索される語を含める。例: 【美品】patagonia R1プルオーバー レッド XL",
  "category":"メルカリのカテゴリを階層で（例: メンズ > ジャケット/アウター > マウンテンパーカー）",
  "condition":"次の6つから1つ: 新品、未使用に近い、目立った傷や汚れなし、やや傷や汚れあり、傷や汚れあり、全体的に状態が悪い",
  "brand":"ブランド名（英語（カタカナ）の形。例: patagonia（パタゴニア））",
  "item":"アイテム名。別名があれば / で併記（例: トレントシェル プルオーバー / マウンテンパーカー / ナイロンジャケット）",
  "color":"色（バイカラーは × で）",
- "size":"サイズ表記＋日本サイズ相当や着用目安（タグの表記を尊重。例: メンズ XS（日本サイズS相当 / 目安160〜168cm・細身〜標準体型の方に◎））",
+ "size":"簡潔なサイズ表記のみ（例: メンズ M / レディース S / Free）。『日本◯サイズ相当』『身長◯cm向け』などの補足は一切書かない",
  "material":"素材（タグから。独自素材名があれば併記）",
- "status":"商品のコンディションだけを書く。汚れ・傷・色あせ・毛玉・におい・ほつれ・ボタンやファスナーの不具合などの有無や箇所、使用感の程度のみ。ブランド紹介・素材の機能・色やデザインの魅力といった商品説明は絶対に含めない（それらは hooks や商品詳細へ）。例: 『目立った汚れや傷はありません。袖口にわずかな使用感があります。』",
- "hooks":["▼ で始まる魅力的な一文を3つ。用途・季節・希少性・機能で購買意欲を刺激。誇張しすぎない"],
+ "status":"商品のコンディションだけを簡潔に書く。汚れ・傷・色あせ・毛玉・におい・ほつれ・金具不具合などの有無や箇所、使用感の程度のみ。ブランド紹介・素材機能・色やデザインの魅力は絶対に含めない。特筆すべき難がなければ1文で簡潔に（例: 『目立った傷や汚れはありません。』）。難がある場合のみその箇所を簡潔に追記",
+ "hooks":["▼ で始まる短く端的なアピールを3つ。各15〜28字程度。商品の強み（希少性・機能・状態・ブランド・用途）をピンポイントで。文末に句点（。）は付けない。だらだら説明しない"],
  "hashtags":["#で始まるタグ10〜14個。ブランド英/カナ・アイテム・用途・季節など"],
  "meas_title":"採寸セクション見出し（衣類は『平置き実寸』、バッグ/靴/小物は『サイズ』）",
  "meas_fields":["この商品に合った標準的な採寸項目名の配列。トップス→肩幅,身幅,着丈,袖丈 / パンツ→ウエスト,股上,股下,わたり幅,裾幅 / スカート→ウエスト,着丈,ヒップ / ワンピース→肩幅,身幅,着丈 / バッグ→高さ,幅,マチ,持ち手の長さ / 靴→ソール全長,横幅 / 帽子→頭周り など"],
@@ -247,9 +262,9 @@ const BOILER_NOTE = `◆ご注意
 
 function measRowHtml(label,val){
   return `<div class="measrow" style="display:flex; gap:8px; margin-bottom:6px; align-items:center;">
-    <input class="measLabel" value="${String(label||'').replace(/"/g,'&quot;')}" placeholder="項目名" style="flex:0 0 38%;">
-    <input class="measVal" value="${String(val||'').replace(/"/g,'&quot;')}" placeholder="cm" style="flex:1;">
-    <button type="button" class="btn-sub delMeas" style="padding:8px 12px;">×</button>
+    <input class="measLabel" value="${String(label||'').replace(/"/g,'&quot;')}" placeholder="項目" style="flex:0 0 6em; min-width:0;">
+    <input class="measVal" value="${String(val||'').replace(/"/g,'&quot;')}" placeholder="cm" inputmode="decimal" style="flex:0 0 5em; min-width:0;">
+    <button type="button" class="btn-sub delMeas" style="padding:8px 12px; flex:0 0 auto;">×</button>
   </div>`;
 }
 function bindMeasDel(){
