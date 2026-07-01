@@ -88,6 +88,7 @@
     <div class="hint">複数枚OK。1枚＝1レシート（複数商品は自動で分けます）</div>
     <div style="height:12px"></div>
     <button class="btn-main" id="analyze" disabled>解析する</button>
+    <div class="status" id="analyzeStatus"></div>
   </div>
 
   <div class="card" id="resultCard" style="display:none;">
@@ -112,7 +113,8 @@
   </div>
 
 <script>
-const GEMINI_MODEL = 'gemini-2.5-flash'; // 動かない場合は 'gemini-2.0-flash' に変更
+const GEMINI_MODEL = 'gemini-2.0-flash'; // 遅い/止まる場合は 'gemini-2.5-flash' に戻す
+const ANALYZE_TIMEOUT_MS = 60000; // 1枚あたりの最大待ち時間（これを超えたらエラーで抜ける）
 const $ = id => document.getElementById(id);
 const store = {
   get k(){return localStorage.getItem('gemini_api_key')||''},
@@ -176,7 +178,17 @@ async function analyzeOne(img){
     contents:[{ parts:[ {text:PROMPT}, {inline_data:{mime_type:img.mime, data:img.base64}} ] }],
     generationConfig:{ responseMimeType:"application/json", temperature:0 }
   };
-  const res = await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const ctrl = new AbortController();
+  const timer = setTimeout(()=>ctrl.abort(), ANALYZE_TIMEOUT_MS);
+  let res;
+  try{
+    res = await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:ctrl.signal});
+  }catch(e){
+    if(e.name === 'AbortError') throw new Error(`タイムアウトしました（${ANALYZE_TIMEOUT_MS/1000}秒）。通信環境を確認するか、モデルを変えて再試行してください。`);
+    throw new Error('通信エラー: '+e.message+'（電波・オフラインをご確認ください）');
+  }finally{
+    clearTimeout(timer);
+  }
   if(!res.ok){ throw new Error('Gemini APIエラー: '+res.status+' '+(await res.text()).slice(0,200)); }
   const data = await res.json();
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
@@ -258,21 +270,30 @@ function rowHtml(it){
 }
 
 $('analyze').onclick = async () => {
-  if(!store.k){ showStatus('err','先に Gemini APIキー を入力してください'); return; }
+  showAnalyzeStatus('', '');
+  if(!store.k){ showAnalyzeStatus('err','先に Gemini APIキー を入力してください'); return; }
   $('analyze').disabled = true; $('analyze').textContent = '解析中…';
   try{
     let all = [];
-    for(const img of images){
-      const items = await analyzeOne(img);
+    for(let i=0;i<images.length;i++){
+      showAnalyzeStatus('info', `解析中… (${i+1}/${images.length}枚目)`);
+      const items = await analyzeOne(images[i]);
       items.forEach(it => it.supplier = supplierFromStore(it.store));
       all = all.concat(items);
     }
     $('tbl').querySelector('tbody').innerHTML = all.map(rowHtml).join('');
     $('resultCard').style.display = 'block';
+    showAnalyzeStatus('', '');
     showStatus('info', all.length+'件を読み取りました。内容を確認して「管理表に追加」を押してください。');
-  }catch(e){ showStatus('err', e.message); }
+  }catch(e){ showAnalyzeStatus('err', e.message); }
   finally{ $('analyze').disabled = false; $('analyze').textContent = '解析する'; }
 };
+
+function showAnalyzeStatus(type,msg){
+  const s = $('analyzeStatus');
+  s.className = 'status' + (type ? ' '+type : '');
+  s.textContent = msg;
+}
 
 $('addRow').onclick = () => {
   $('tbl').querySelector('tbody').insertAdjacentHTML('beforeend', rowHtml({date:'',name:'',amount:0,supplier:''}));
