@@ -160,17 +160,23 @@ function setCollapsed(c){
 $('setHead').onclick = ()=> setCollapsed($('setBody').style.display !== 'none');
 setCollapsed(settingsComplete());
 
-const PROMPT = `あなたは中古品店（トレジャーファクトリー/トレファク、セカンドストリート/2nd STREET/セカスト 等）のレシート読み取り係です。
-画像から「購入した商品」を抽出し、次の形式のJSONだけを返してください（前後の説明文やマークダウンは一切不要）。
-{"items":[{"name":"品名","amount":税込金額の整数(円),"date":"YYYY/MM/DD","store":"店舗名"}]}
-ルール:
-- 「割引」「値引き」「セール」「クーポン」「◯%OFF」などの値引き行は、商品にまとめず、それ単独で1行として出す（name はレシートの表記、amount は**マイナス**の整数(円)）。金額の引き算はこちらで行うので、あなたは商品行と値引き行をそのまま素直に読み取ればよい。値引き額を商品の amount に混ぜないこと。
-- 価格が税抜で表示されている場合は税込(税抜×1.1, 四捨五入)に直して amount に入れる（値引き行も同様）。税込表示ならそのまま。
-- 合計・小計・お釣り・ポイント残高・会員番号・電話番号は商品に含めない。商品の明細行と値引き行だけを対象にする。
-- 商品行の name はレシート記載の商品名（ブランド・サイズ・色など付帯情報も含めてそのまま）。値引き額を名前に含めない。
-- date はレシートの購入日（営業日時/取引日時）。
-- store はレシート上部の店舗名。
-- 確認: 全商品の amount の合計が、レシートの「合計」金額と一致するようにする。`;
+const PROMPT = `あなたは日本の中古品店（トレジャーファクトリー/トレファク、セカンドストリート/2nd STREET/セカスト、ハードオフ 等）のレシート（領収書）を読み取る専門係です。写真が斜めや湾曲していても、各行とその右端の金額の対応を一つずつ丁寧に確認して正確に読み取ってください。
+画像から明細を抽出し、次のJSONだけを返してください（前後の説明やマークダウンは一切不要）。
+{"store":"店舗名","total":合計金額の整数,"items":[{"name":"品名 または 値引きの表記","amount":金額の整数(円),"date":"YYYY/MM/DD"}]}
+
+レシートの構造:
+- 明細は「商品行」と「値引き行」が上から順に並ぶ。金額は各行の右端にあり、末尾に「込」（税込）や「円」が付くことが多い。
+- 商品行の下に、その商品の商品コード（10桁以上の数字だけの行）が入ることがある。数字だけの行は商品ではないので出力しない。
+- 「50%割引」「▲イベント200円割引」「値引き」「クーポン」などの値引き行は、直前の商品に対する値引き。
+
+出力ルール（重要）:
+- items は必ずレシートに印字された上からの順番で並べる（商品→その値引き→次の商品→その値引き…）。金額の引き算はこちらで行うので、値引きは独立した行として **amount をマイナス** で素直に出す。商品の amount に値引きを混ぜない。
+- 各 amount はレシート右端に印字された金額そのもの（商品はプラス、値引きはマイナス）。税抜表示のときだけ税込(×1.1,四捨五入)に直す。「込」表示ならそのまま。
+- date はレシートの購入日（YYYY/MM/DD）。全 item に同じ日付を入れてよい。
+- store は、レシート上部（「★お買取…」の下あたり）の店舗名を、チェーン名も含め省略せず正確に（例:「トレジャーファクトリー足立西新井店」「セカンドストリート○○店」）。かすれていても推測で補完する。
+- total はレシートの「合計」の金額（整数）。
+- 合計・小計・お釣り・預り額・ポイント残高・消費税・会員番号・電話番号は items に含めない。
+- 自己検証: items の amount を全部足すと total に一致するはず。合わなければ各行の金額を読み直して直してから返す。`;
 
 const MAX_RETRIES_503 = 3; // 混雑(503)は短い間隔で自動再試行
 const MAX_RETRIES_429 = 1; // レート制限(429)は長め・1回だけ（無駄打ちで1日の上限を食わないため）
@@ -204,8 +210,9 @@ async function analyzeOnce(img){
   }
   const data = await res.json();
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-  const json = JSON.parse(text.match(/\{[\s\S]*\}/)[0]);
-  return json.items || [];
+  const m = text.match(/\{[\s\S]*\}/);
+  const json = JSON.parse(m ? m[0] : '{}');
+  return { items: json.items || [], total: Number(json.total) || 0, store: json.store || '' };
 }
 
 async function analyzeOne(img, onRetry){
@@ -274,12 +281,13 @@ async function loadSuppliers(){
 loadSuppliers();
 
 function normStore_(s){
-  return String(s||'').normalize('NFKC').replace(/\s/g,'').toLowerCase();
+  return String(s||'').normalize('NFKC').replace(/\s/g,'').toLowerCase()
+    .replace(/^[^0-9a-z぀-ヿ一-鿿]+/,''); // 先頭のゴミ記号（-など読み取り由来）を除去
 }
 // 店名からチェーン名や語尾（店・駅◯口・SS等）を除いた「エリア名（地名など）」を取り出す
 function coreArea_(name){
   return normStore_(name)
-    .replace(/セカンドストリート|セカスト|2ndstreet|street|トレジャーファクトリー|トレファクスタイル|トレファクファッション|トレファク|treasurefactory|ハードオフ|hardoff|モードオフ|modeoff|ドンキホーテ|ドンキ|アルペン|alpen|オンライン|online/g,'')
+    .replace(/セカンドストリート|セカスト|2ndstreet|street|トレジャーファクトリー|トレファクスタイル|トレファクファッション|トレファク|ファクトリー|treasurefactory|factory|ハードオフ|hardoff|モードオフ|modeoff|ドンキホーテ|ドンキ|アルペン|alpen|オンライン|online/g,'')
     .replace(/^2nd|^ss|ss$/g,'')
     .replace(/駅.*$/,'')   // 「◯◯駅西口店」などは駅以降を落として地名だけに
     .replace(/店$/,'');
@@ -289,7 +297,7 @@ function supplierFromStore(s){
   if(!sn) return '';
   let pre = '';
   if(/(2nd|セカンド|セカスト|street)/i.test(sn)) pre = 'se';
-  else if(/(トレファク|トレジャー|trefac|treasure)/i.test(sn)) pre = 'tr';
+  else if(/(トレファク|トレジャー|ファクトリー|trefac|treasure|factory)/i.test(sn)) pre = 'tr';
   else if(/(ハードオフ|モードオフ|hardoff|modeoff)/i.test(sn)) pre = 'ha';
   else if(/(ドンキ|donki)/i.test(sn)) pre = 'do';
   else if(/(アルペン|alpen)/i.test(sn)) pre = 'al';
@@ -347,19 +355,27 @@ $('analyze').onclick = async () => {
   $('analyze').disabled = true; $('analyze').textContent = '解析中…';
   try{
     let all = [];
+    const warnings = [];
     for(let i=0;i<images.length;i++){
       showAnalyzeStatus('info', `解析中… (${i+1}/${images.length}枚目)`);
-      const raw = await analyzeOne(images[i], (status, attempt, max, waitMs) => {
+      const res = await analyzeOne(images[i], (status, attempt, max, waitMs) => {
         const reason = status === 429 ? 'レート制限(429)' : 'サーバー一時エラー(503)';
         showAnalyzeStatus('info', `${reason}のため${waitMs/1000}秒待って自動再試行します… (${attempt}/${max}回目, ${i+1}/${images.length}枚目)`);
       });
-      const items = applyDiscounts(raw); // 値引き行を直前商品に反映して行から除く
-      items.forEach(it => it.supplier = supplierFromStore(it.store));
+      const items = applyDiscounts(res.items || []); // 値引き行を直前商品に反映して行から除く
+      const receiptStore = res.store || (items[0] && items[0].store) || '';
+      items.forEach(it => { it.store = receiptStore; it.supplier = supplierFromStore(receiptStore); });
+      // 合計チェック：読み取った金額の合計がレシート合計と食い違えば警告（黙って誤取込しない）
+      const sum = items.reduce((a,it)=>a+(Number(it.amount)||0),0);
+      if(res.total && Math.abs(sum - res.total) > 1){
+        warnings.push(`${i+1}枚目：読み取り合計 ¥${sum.toLocaleString()} がレシート合計 ¥${res.total.toLocaleString()} と不一致。金額を確認してください`);
+      }
       all = all.concat(items);
     }
     $('tbl').querySelector('tbody').innerHTML = all.map(rowHtml).join('');
     $('resultCard').style.display = 'block';
-    showAnalyzeStatus('', '');
+    if(warnings.length){ showAnalyzeStatus('err', '⚠️ ' + warnings.join(' ／ ')); }
+    else { showAnalyzeStatus('', ''); }
     showStatus('info', all.length+'件を読み取りました。内容を確認して「管理表に追加」を押してください。');
   }catch(e){ showAnalyzeStatus('err', e.message); }
   finally{ $('analyze').disabled = false; $('analyze').textContent = '解析する'; }
