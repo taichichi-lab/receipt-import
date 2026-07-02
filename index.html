@@ -164,10 +164,10 @@ const PROMPT = `あなたは中古品店（トレジャーファクトリー/ト
 画像から「購入した商品」を抽出し、次の形式のJSONだけを返してください（前後の説明文やマークダウンは一切不要）。
 {"items":[{"name":"品名","amount":税込金額の整数(円),"date":"YYYY/MM/DD","store":"店舗名"}]}
 ルール:
-- 商品の下や近くに「割引」「値引き」「OFF」などのマイナス金額の行がある場合は、その値引き額を対象商品の価格から引いて、実際に支払う金額を amount にする（例: 4,400円 と 50%割引 -2,200円 → amount は 2,200）。
-- 価格が税抜で表示されている場合は税込(税抜×1.1, 四捨五入)に直して amount に入れる。税込表示ならそのまま。
-- 合計・小計・お釣り・ポイント・会員番号・電話番号は商品に含めない。商品の明細行だけを対象にする。
-- name はレシート記載の商品名（ブランド・サイズ・色など付帯情報も含めてそのまま）。割引行は名前に含めない。
+- 「割引」「値引き」「セール」「クーポン」「◯%OFF」などの値引き行は、商品にまとめず、それ単独で1行として出す（name はレシートの表記、amount は**マイナス**の整数(円)）。金額の引き算はこちらで行うので、あなたは商品行と値引き行をそのまま素直に読み取ればよい。値引き額を商品の amount に混ぜないこと。
+- 価格が税抜で表示されている場合は税込(税抜×1.1, 四捨五入)に直して amount に入れる（値引き行も同様）。税込表示ならそのまま。
+- 合計・小計・お釣り・ポイント残高・会員番号・電話番号は商品に含めない。商品の明細行と値引き行だけを対象にする。
+- 商品行の name はレシート記載の商品名（ブランド・サイズ・色など付帯情報も含めてそのまま）。値引き額を名前に含めない。
 - date はレシートの購入日（営業日時/取引日時）。
 - store はレシート上部の店舗名。
 - 確認: 全商品の amount の合計が、レシートの「合計」金額と一致するようにする。`;
@@ -273,26 +273,61 @@ async function loadSuppliers(){
 }
 loadSuppliers();
 
+function normStore_(s){
+  return String(s||'').normalize('NFKC').replace(/\s/g,'').toLowerCase();
+}
+// 店名からチェーン名や語尾（店・駅◯口・SS等）を除いた「エリア名（地名など）」を取り出す
 function coreArea_(name){
-  return String(name)
-    .replace(/セカンドストリート|セカスト|トレジャーファクトリー|トレファクスタイル|トレファクファッション|トレファク|ハードオフ|モードオフ|ドンキホーテ|アルペン|オンライン|店/g,'')
-    .replace(/\s/g,'');
+  return normStore_(name)
+    .replace(/セカンドストリート|セカスト|2ndstreet|street|トレジャーファクトリー|トレファクスタイル|トレファクファッション|トレファク|treasurefactory|ハードオフ|hardoff|モードオフ|modeoff|ドンキホーテ|ドンキ|アルペン|alpen|オンライン|online/g,'')
+    .replace(/^2nd|^ss|ss$/g,'')
+    .replace(/駅.*$/,'')   // 「◯◯駅西口店」などは駅以降を落として地名だけに
+    .replace(/店$/,'');
 }
 function supplierFromStore(s){
-  s = (s||'').replace(/\s/g,'');
-  if(!s) return '';
+  const sn = normStore_(s); // 正規化したレシート店名
+  if(!sn) return '';
   let pre = '';
-  if(/(2nd|セカンド|セカスト)/i.test(s)) pre = 'se';
-  else if(/(トレファク|トレジャー|TREFAC|TREASURE)/i.test(s)) pre = 'tr';
-  else if(/(ハードオフ|モードオフ)/i.test(s)) pre = 'ha';
-  else if(/ドンキ/i.test(s)) pre = 'do';
-  else if(/アルペン/i.test(s)) pre = 'al';
+  if(/(2nd|セカンド|セカスト|street)/i.test(sn)) pre = 'se';
+  else if(/(トレファク|トレジャー|trefac|treasure)/i.test(sn)) pre = 'tr';
+  else if(/(ハードオフ|モードオフ|hardoff|modeoff)/i.test(sn)) pre = 'ha';
+  else if(/(ドンキ|donki)/i.test(sn)) pre = 'do';
+  else if(/(アルペン|alpen)/i.test(sn)) pre = 'al';
+  const snCore = coreArea_(s); // レシート店名のエリア名
+  let best = '', bestLen = 0;
   for(const m of SUPPLIERS){
     if(pre && !m.key.startsWith(pre)) continue;
     const core = coreArea_(m.name);
-    if(core.length >= 2 && s.includes(core.slice(0,2))) return m.key + '_' + m.name;
+    if(core.length < 2) continue;
+    // ① シート店名のエリア名がレシート店名に丸ごと含まれれば一致
+    let hit = sn.includes(core);
+    // ② 逆に、レシート側のエリア名でシート店名を照合（表記揺れの保険）
+    if(!hit && snCore.length >= 2 && core.includes(snCore)) hit = true;
+    // ③ 最後の保険：同一チェーン内でエリア名の先頭2文字一致
+    if(!hit && pre && sn.includes(core.slice(0,2))) hit = true;
+    if(hit && core.length > bestLen){ best = m.key + '_' + m.name; bestLen = core.length; } // 最長一致を優先
   }
-  return ''; // 自動判定できなければ空。プルダウンから選んでもらう
+  return best; // 判定できなければ空。プルダウンから選んでもらう
+}
+
+// 値引き行かどうか。マイナス金額 or 値引き特有の語（ブランド名OFF-WHITE等を誤検出しない語）で判定
+const DISCOUNT_RE = /(割引|値引|セール|クーポン|ポイント利用|ポイント値引|[%％]\s*off|割\s*引)/i;
+function isDiscount(it){
+  return (Number(it.amount) < 0) || DISCOUNT_RE.test(String(it.name||''));
+}
+// 値引き行を直前の商品から差し引き、行としては消す（同一レシート内で処理）
+function applyDiscounts(items){
+  const out = [];
+  for(const it of (items||[])){
+    if(isDiscount(it)){
+      const amt = Math.abs(Number(it.amount)||0);
+      if(out.length) out[out.length-1].amount = (Number(out[out.length-1].amount)||0) - amt;
+      // 先行商品が無い値引き（注文全体割引が先頭に来た等）は取りこぼすが稀。必要なら手動追加
+      continue;
+    }
+    out.push({...it, amount: Number(it.amount)||0});
+  }
+  return out;
 }
 
 function rowHtml(it){
@@ -314,10 +349,11 @@ $('analyze').onclick = async () => {
     let all = [];
     for(let i=0;i<images.length;i++){
       showAnalyzeStatus('info', `解析中… (${i+1}/${images.length}枚目)`);
-      const items = await analyzeOne(images[i], (status, attempt, max, waitMs) => {
+      const raw = await analyzeOne(images[i], (status, attempt, max, waitMs) => {
         const reason = status === 429 ? 'レート制限(429)' : 'サーバー一時エラー(503)';
         showAnalyzeStatus('info', `${reason}のため${waitMs/1000}秒待って自動再試行します… (${attempt}/${max}回目, ${i+1}/${images.length}枚目)`);
       });
+      const items = applyDiscounts(raw); // 値引き行を直前商品に反映して行から除く
       items.forEach(it => it.supplier = supplierFromStore(it.store));
       all = all.concat(items);
     }
