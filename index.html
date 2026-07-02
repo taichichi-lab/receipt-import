@@ -172,7 +172,11 @@ const PROMPT = `あなたは中古品店（トレジャーファクトリー/ト
 - store はレシート上部の店舗名。
 - 確認: 全商品の amount の合計が、レシートの「合計」金額と一致するようにする。`;
 
-async function analyzeOne(img){
+const RETRYABLE_STATUS = [429, 503];
+const MAX_RETRIES = 3;
+const sleep = ms => new Promise(r=>setTimeout(r, ms));
+
+async function analyzeOnce(img){
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(store.k)}`;
   const body = {
     contents:[{ parts:[ {text:PROMPT}, {inline_data:{mime_type:img.mime, data:img.base64}} ] }],
@@ -189,11 +193,30 @@ async function analyzeOne(img){
   }finally{
     clearTimeout(timer);
   }
-  if(!res.ok){ throw new Error('Gemini APIエラー: '+res.status+' '+(await res.text()).slice(0,200)); }
+  if(!res.ok){
+    const errBody = (await res.text()).slice(0,200);
+    const err = new Error('Gemini APIエラー: '+res.status+' '+errBody);
+    err.status = res.status;
+    throw err;
+  }
   const data = await res.json();
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
   const json = JSON.parse(text.match(/\{[\s\S]*\}/)[0]);
   return json.items || [];
+}
+
+async function analyzeOne(img, onRetry){
+  for(let attempt=0; ; attempt++){
+    try{
+      return await analyzeOnce(img);
+    }catch(e){
+      const retryable = RETRYABLE_STATUS.includes(e.status);
+      if(!retryable || attempt >= MAX_RETRIES) throw e;
+      const waitMs = 2000 * Math.pow(2, attempt); // 2s, 4s, 8s
+      if(onRetry) onRetry(e.status, attempt+1, MAX_RETRIES, waitMs);
+      await sleep(waitMs);
+    }
+  }
 }
 
 // 仕入先リスト：起動時にGAS経由で「仕入先詳細」シートから取得する（新店を足せば自動反映）。
@@ -277,7 +300,10 @@ $('analyze').onclick = async () => {
     let all = [];
     for(let i=0;i<images.length;i++){
       showAnalyzeStatus('info', `解析中… (${i+1}/${images.length}枚目)`);
-      const items = await analyzeOne(images[i]);
+      const items = await analyzeOne(images[i], (status, attempt, max, waitMs) => {
+        const reason = status === 429 ? '混雑(429)' : 'サーバー一時エラー(503)';
+        showAnalyzeStatus('info', `${reason}のため${waitMs/1000}秒待って自動再試行します… (${attempt}/${max}回目, ${i+1}/${images.length}枚目)`);
+      });
       items.forEach(it => it.supplier = supplierFromStore(it.store));
       all = all.concat(items);
     }
