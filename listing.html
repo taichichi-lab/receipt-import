@@ -69,12 +69,25 @@
     <div id="setBody">
     <label>Gemini APIキー（レシートツールと同じキーでOK）</label>
     <input type="password" id="geminiKey" placeholder="AQ... / AIza... のキー">
+    <label>GAS Web App の URL（レシートツールと同じでOK・出品待ちリスト用）</label>
+    <input type="text" id="gasUrl" placeholder="https://script.google.com/macros/s/…/exec">
+    <label>合言葉（レシートツールと同じ）</label>
+    <input type="password" id="gasToken" placeholder="合言葉">
     <div class="hint">レシートツールと同じ端末なら、すでに入っているはずです。</div>
     </div>
   </div>
 
   <div class="card">
-    <h2>② 商品写真</h2>
+    <div class="set-head">
+      <h2>② 出品待ちリスト（管理表から）</h2>
+      <button class="btn-sub" id="loadQueue">🔄 読み込む</button>
+    </div>
+    <div id="queueBody" class="hint" style="margin-top:8px;">「読み込む」で管理表から ★未出品 とテコ入れ候補を取得します。使わずに③から直接出品してもOK。</div>
+  </div>
+
+  <div class="card">
+    <h2>③ 商品写真</h2>
+    <div id="selBanner" class="status" style="margin:0 0 10px;"></div>
     <div class="pickrow">
       <button class="bigpick" id="btnCam"><span class="ic">📷</span>撮影</button>
       <button class="bigpick" id="btnLib"><span class="ic">🖼️</span>アルバムから選択</button>
@@ -94,7 +107,7 @@
   </div>
 
   <div class="card" id="measCard" style="display:none;">
-    <h2>③ 採寸（cm）<span class="hint" style="font-weight:normal;">写真から測れないので入力してください</span></h2>
+    <h2>④ 採寸（cm）<span class="hint" style="font-weight:normal;">写真から測れないので入力してください</span></h2>
     <div id="measFields"></div>
     <div style="height:8px"></div>
     <div class="row-flex">
@@ -105,7 +118,7 @@
   </div>
 
   <div class="card" id="resultCard" style="display:none;">
-    <h2>④ 出品情報</h2>
+    <h2>⑤ 出品情報</h2>
     <div id="meta" class="field"></div>
     <label>タイトル <span class="hint" style="font-weight:normal;" id="titleLen"></span></label>
     <input type="text" id="title">
@@ -116,10 +129,15 @@
     <textarea id="desc" rows="20"></textarea>
     <div style="height:6px"></div>
     <button class="btn-main" id="copyDesc">説明文をコピー</button>
+
+    <div id="doneWrap" style="display:none; margin-top:16px; border-top:1px solid var(--line); padding-top:14px;">
+      <button class="btn-main" id="markDone" style="width:100%;">✅ 出品完了 — 管理表に反映（★外し＋出品日を記録）</button>
+      <div class="hint">メルカリで出品し終えたら押してください。管理表の品名が上のタイトルに置き換わります。</div>
+    </div>
   </div>
 
   <div class="card" id="thumbCard" style="display:none;">
-    <h2>⑤ 1枚目サムネ（写真は無加工・文字だけ重ねます）</h2>
+    <h2>⑥ 1枚目サムネ（写真は無加工・文字だけ重ねます）</h2>
     <label>サムネにする写真（タップで切替）</label>
     <div class="thumbs" id="thumbPick"></div>
     <button class="btn-sub" id="addThumbPhoto" style="margin-top:6px;">＋ 写真を追加／差し替え</button>
@@ -141,10 +159,130 @@ const GEMINI_MODEL = 'gemini-2.5-flash';
 const $ = id => document.getElementById(id);
 $('geminiKey').value = localStorage.getItem('gemini_api_key') || '';
 $('geminiKey').oninput = e => localStorage.setItem('gemini_api_key', e.target.value.trim());
+$('gasUrl').value = localStorage.getItem('receipt_gas_url') || '';
+$('gasUrl').oninput = e => localStorage.setItem('receipt_gas_url', e.target.value.trim());
+$('gasToken').value = localStorage.getItem('receipt_token') || '';
+$('gasToken').oninput = e => localStorage.setItem('receipt_token', e.target.value.trim());
 
 let images = [];        // {dataUrl, base64, mime, img}
 let thumbIndex = 0;
 let gen = null;         // Geminiの生成結果
+let queue = [];         // 管理表の出品待ちリスト
+let selItem = null;     // リストから選択中の商品 {row, name, ...}
+
+/* ---------- 出品待ちリスト（管理表連携） ---------- */
+function gasCfg(){ return { url: localStorage.getItem('receipt_gas_url')||'', token: localStorage.getItem('receipt_token')||'' }; }
+function escHtml(s){ return String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function stripStar(s){ return String(s).replace(/^★+/,''); }
+
+$('loadQueue').onclick = async ()=>{
+  const {url, token} = gasCfg();
+  if(!url || !token){ showStatus('err','①の設定に GAS の URL と合言葉を入れてください'); return; }
+  $('loadQueue').disabled = true; $('loadQueue').textContent = '読込中…';
+  try{
+    const res = await fetch(url + (url.includes('?')?'&':'?') + 'mode=listing&token=' + encodeURIComponent(token));
+    const data = await res.json();
+    if(!data.ok) throw new Error(data.error || '取得に失敗しました');
+    queue = data.items || [];
+    renderQueue();
+  }catch(e){ showStatus('err','リスト取得: ' + e.message); }
+  finally{ $('loadQueue').disabled = false; $('loadQueue').textContent = '🔄 読み込む'; }
+};
+
+function tuneAction(d){ return d>=28 ? '再出品推奨' : d>=14 ? '再値下げ' : '値下げ'; }
+
+function renderQueue(){
+  const pend   = queue.filter(i=>i.pending && !i.sealed);
+  const sealed = queue.filter(i=>i.pending && i.sealed);
+  const tune   = queue.filter(i=>!i.pending).sort((a,b)=>b.daysListed-a.daysListed);
+
+  const rowHtml = (i, sub, btns) => `
+    <div style="display:flex; align-items:center; gap:8px; padding:9px 0; border-bottom:1px solid var(--line);">
+      <div style="flex:1; min-width:0; font-size:13px;">
+        <b>${escHtml(stripStar(i.name))}</b><br>
+        <span class="hint">${sub}</span>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:6px;">${btns}</div>
+    </div>`;
+
+  let h = '';
+  if(pend.length){
+    h += `<label>未出品 ${pend.length}件${sealed.length ? `（ほかに寝かせ中 ${sealed.length}件）` : ''}</label>`;
+    h += pend.map(i => rowHtml(i,
+      `${i.purchaseDate} 仕入 ¥${(i.amount||0).toLocaleString()}${i.unsealed ? ' 🌸出品時期です' : ''}`,
+      `<button class="btn-main qpick" data-row="${i.row}" style="padding:8px 12px; font-size:13px;">出品する</button>`
+    )).join('');
+  } else if(sealed.length){
+    h += `<label>未出品 0件（寝かせ中 ${sealed.length}件）</label>`;
+  }
+  if(tune.length){
+    h += `<label style="margin-top:14px;">テコ入れ候補 ${tune.length}件（出品から日数が経った在庫）</label>`;
+    h += tune.map(i => rowHtml(i,
+      `出品から${i.daysListed}日 → <b>${tuneAction(i.daysListed)}</b>・仕入 ¥${(i.amount||0).toLocaleString()}`,
+      `<button class="btn-sub qrelist" data-row="${i.row}" style="padding:8px 12px; font-size:13px;">再出品した ✓</button>
+       <button class="btn-sub qpick" data-row="${i.row}" style="padding:8px 12px; font-size:13px;">文面を作り直す</button>`
+    )).join('');
+  }
+  if(!h) h = '<div class="hint">出品待ち・テコ入れ候補はありません 🎉</div>';
+  $('queueBody').innerHTML = h;
+
+  $('queueBody').querySelectorAll('.qpick').forEach(b => b.onclick = ()=> pickItem(+b.dataset.row));
+  $('queueBody').querySelectorAll('.qrelist').forEach(b => b.onclick = ()=> relistItem(+b.dataset.row, b));
+}
+
+function pickItem(row){
+  selItem = queue.find(i=>i.row===row) || null;
+  if(!selItem) return;
+  updateSelBanner();
+  if(gen) $('doneWrap').style.display = 'block';
+  showStatus('info','「'+stripStar(selItem.name)+'」を選択しました。写真を撮って生成してください。');
+  document.querySelectorAll('main .card')[2].scrollIntoView({behavior:'smooth'});
+}
+function updateSelBanner(){
+  const b = $('selBanner');
+  if(!selItem){ b.className='status'; b.innerHTML=''; return; }
+  b.className = 'status info';
+  b.innerHTML = `📌 出品対象: <b>${escHtml(stripStar(selItem.name))}</b>（管理表 ${selItem.row}行目）
+    <button class="btn-sub" id="clearSel" style="padding:2px 10px; font-size:12px; margin-left:6px;">解除</button>`;
+  $('clearSel').onclick = ()=>{ selItem=null; updateSelBanner(); $('doneWrap').style.display='none'; };
+}
+
+async function postMarkListed(item, title){
+  const {url, token} = gasCfg();
+  const res = await fetch(url, { method:'POST', body: JSON.stringify({ token, action:'markListed', row:item.row, expectedName:item.name, title }) });
+  const data = await res.json();
+  if(!data.ok) throw new Error(data.error || '書き込みに失敗しました');
+  return data;
+}
+
+async function relistItem(row, btn){
+  const item = queue.find(i=>i.row===row);
+  if(!item) return;
+  btn.disabled = true; btn.textContent = '更新中…';
+  try{
+    await postMarkListed(item, stripStar(item.name)); // タイトルは変えず出品日だけ今日に
+    queue = queue.filter(i=>i.row!==row);
+    renderQueue();
+    showStatus('ok','「'+stripStar(item.name)+'」の出品日を今日にリセットしました。');
+  }catch(e){ showStatus('err', e.message); btn.disabled=false; btn.textContent='再出品した ✓'; }
+}
+
+$('markDone').onclick = async ()=>{
+  if(!selItem) return;
+  const title = $('title').value.trim();
+  if(!title){ showStatus('err','タイトルが空です'); return; }
+  const btn = $('markDone');
+  btn.disabled = true; btn.textContent = '管理表に反映中…';
+  try{
+    const data = await postMarkListed(selItem, title);
+    queue = queue.filter(i=>i.row!==selItem.row);
+    selItem = null; updateSelBanner(); renderQueue();
+    $('doneWrap').style.display = 'none';
+    showStatus('ok','管理表 '+data.row+'行目を更新しました（★外し＋出品日を記録）。');
+  }catch(e){ showStatus('err', e.message); }
+  finally{ btn.disabled = false; btn.textContent = '✅ 出品完了 — 管理表に反映（★外し＋出品日を記録）'; }
+};
+/* ---------- ここまで管理表連携 ---------- */
 
 function addImages(files){
   [...files].filter(f=>f.type.startsWith('image/')).forEach(f=>{
@@ -172,6 +310,7 @@ $('fileLib').onchange = e => addImages(e.target.files);
 
 function resetAll(){
   images = []; thumbIndex = 0; gen = null;
+  selItem = null; updateSelBanner(); $('doneWrap').style.display='none';
   $('fileCam').value=''; $('fileLib').value=''; $('memo').value='';
   renderThumbs();
   ['measCard','resultCard','thumbCard'].forEach(id=>$(id).style.display='none');
@@ -322,6 +461,7 @@ function showResult(){
   $('measCard').style.display='block';
   $('resultCard').style.display='block';
   $('thumbCard').style.display='block';
+  $('doneWrap').style.display = selItem ? 'block' : 'none';
   drawThumb();
 }
 
