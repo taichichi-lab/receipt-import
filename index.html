@@ -113,7 +113,7 @@
   </div>
 
 <script>
-const GEMINI_MODEL = 'gemini-2.0-flash'; // 遅い/止まる場合は 'gemini-2.5-flash' に戻す
+const GEMINI_MODEL = 'gemini-2.5-flash-lite'; // 無料枠が大きく429(上限)に当たりにくい。精度が足りなければ 'gemini-2.5-flash' に
 const ANALYZE_TIMEOUT_MS = 60000; // 1枚あたりの最大待ち時間（これを超えたらエラーで抜ける）
 const $ = id => document.getElementById(id);
 const store = {
@@ -172,8 +172,8 @@ const PROMPT = `あなたは中古品店（トレジャーファクトリー/ト
 - store はレシート上部の店舗名。
 - 確認: 全商品の amount の合計が、レシートの「合計」金額と一致するようにする。`;
 
-const RETRYABLE_STATUS = [429, 503];
-const MAX_RETRIES = 3;
+const MAX_RETRIES_503 = 3; // 混雑(503)は短い間隔で自動再試行
+const MAX_RETRIES_429 = 1; // レート制限(429)は長め・1回だけ（無駄打ちで1日の上限を食わないため）
 const sleep = ms => new Promise(r=>setTimeout(r, ms));
 
 async function analyzeOnce(img){
@@ -195,7 +195,10 @@ async function analyzeOnce(img){
   }
   if(!res.ok){
     const errBody = (await res.text()).slice(0,200);
-    const err = new Error('Gemini APIエラー: '+res.status+' '+errBody);
+    const msg = res.status === 429
+      ? 'Gemini無料枠の上限に達しました（429）。1日の上限の場合は日本時間の夕方ごろにリセットされます。少し時間をおくか、設定でモデルを軽いものに変えてお試しください。'
+      : 'Gemini APIエラー: '+res.status+' '+errBody;
+    const err = new Error(msg);
     err.status = res.status;
     throw err;
   }
@@ -206,15 +209,26 @@ async function analyzeOnce(img){
 }
 
 async function analyzeOne(img, onRetry){
-  for(let attempt=0; ; attempt++){
+  let n503 = 0, n429 = 0;
+  for(;;){
     try{
       return await analyzeOnce(img);
     }catch(e){
-      const retryable = RETRYABLE_STATUS.includes(e.status);
-      if(!retryable || attempt >= MAX_RETRIES) throw e;
-      const waitMs = 2000 * Math.pow(2, attempt); // 2s, 4s, 8s
-      if(onRetry) onRetry(e.status, attempt+1, MAX_RETRIES, waitMs);
-      await sleep(waitMs);
+      if(e.status === 503 && n503 < MAX_RETRIES_503){
+        const waitMs = 2000 * Math.pow(2, n503++); // 2s, 4s, 8s
+        if(onRetry) onRetry(503, n503, MAX_RETRIES_503, waitMs);
+        await sleep(waitMs);
+        continue;
+      }
+      // 429（レート/上限）は連打しても跳ね返されて上限を無駄に消費するだけ。
+      // 「分あたり上限」なら1分で回復するので、長めに1回だけ試して、ダメなら諦める。
+      if(e.status === 429 && n429 < MAX_RETRIES_429){
+        const waitMs = 60000;
+        if(onRetry) onRetry(429, ++n429, MAX_RETRIES_429, waitMs);
+        await sleep(waitMs);
+        continue;
+      }
+      throw e;
     }
   }
 }
@@ -301,7 +315,7 @@ $('analyze').onclick = async () => {
     for(let i=0;i<images.length;i++){
       showAnalyzeStatus('info', `解析中… (${i+1}/${images.length}枚目)`);
       const items = await analyzeOne(images[i], (status, attempt, max, waitMs) => {
-        const reason = status === 429 ? '混雑(429)' : 'サーバー一時エラー(503)';
+        const reason = status === 429 ? 'レート制限(429)' : 'サーバー一時エラー(503)';
         showAnalyzeStatus('info', `${reason}のため${waitMs/1000}秒待って自動再試行します… (${attempt}/${max}回目, ${i+1}/${images.length}枚目)`);
       });
       items.forEach(it => it.supplier = supplierFromStore(it.store));

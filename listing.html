@@ -364,7 +364,7 @@ async function callGemini(){
   const parts = [{text:fullPrompt}, ...images.map(i=>({inline_data:{mime_type:i.mime, data:i.base64}}))];
   const body = { contents:[{parts}], generationConfig:{responseMimeType:"application/json", temperature:0.4} };
 
-  const models = [GEMINI_MODEL, 'gemini-2.0-flash', 'gemini-flash-latest'];
+  const models = [GEMINI_MODEL, 'gemini-2.5-flash-lite', 'gemini-flash-latest'];
   let lastErr = '';
   for(const model of models){
     for(let attempt=0; attempt<3; attempt++){
@@ -372,7 +372,12 @@ async function callGemini(){
       let res;
       try{ res = await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); }
       catch(e){ lastErr='通信エラー'; await sleep(1000); continue; }
-      if(res.status===503 || res.status===429 || res.status===500){ // 混雑・一時的：待って再試行
+      if(res.status===429){ // レート制限/上限：同じモデルで粘っても無駄。別モデル(別の無料枠)へ切替
+        lastErr = 'レート制限(429)';
+        showStatus('info','無料枠の上限のため別モデルに切り替えます…');
+        break; // 内側ループを抜けて次のモデルへ
+      }
+      if(res.status===503 || res.status===500){ // 混雑・一時エラー：待って再試行
         lastErr = '混雑('+res.status+')';
         showStatus('info','Geminiが混雑中… 自動で再試行します（'+model+'）');
         await sleep(1500*(attempt+1));
@@ -386,7 +391,7 @@ async function callGemini(){
       return JSON.parse(m[0]);
     }
   }
-  throw new Error('Geminiが混雑しています。少し待ってもう一度お試しください。（'+lastErr+'）');
+  throw new Error('Geminiが混雑、または無料枠の上限に達しています。日本時間の夕方ごろにリセットされます。少し待ってお試しください。（'+lastErr+'）');
 }
 
 const BOILER_SHIP = `◆発送・梱包
